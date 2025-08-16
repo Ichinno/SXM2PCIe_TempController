@@ -16,8 +16,14 @@
 #define DelayHalfTimes_us 5
 
 void soft_AiP650E_Init();
-void AiP650E_START();
-void AiP650E_STOP(void);
-u8 AiP650E_waitACK(void);
-void soft_AiP650E_Write(u8 i2c_data_output);
-u8 soft_AiP650E_Read(void);
+void AiP_Temp2Array(u8 *arr,u16 temp);
+void AiP_PWM2Array(u8 *arr, u16 PWM);
+void AiP_Mode2Array(u8 *arr, u8 mode);
+void AiP650E_Display_Number(u8 *arr);
+void AiP650E_Fresh();
+u8 AiP650E_Return_KEY();
+//void AiP650E_START();
+//void AiP650E_STOP(void);
+//u8 AiP650E_waitACK(void);
+//void soft_AiP650E_Write(u8 i2c_data_output);
+//u8 soft_AiP650E_Read(void);

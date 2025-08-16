@@ -41,6 +41,16 @@
 				"parentLogicPath": "",
 				"type": "file",
 				"name": "*.wvproj"
+			},
+			{
+				"name": "main_restruct.c",
+				"parentLogicPath": "User",
+				"type": "file"
+			},
+			{
+				"name": "main-BK.c",
+				"parentLogicPath": "User",
+				"type": "file"
 			}
 		],
 		"projectName": "Temp_Control_System",

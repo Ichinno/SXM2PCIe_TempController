@@ -1,27 +1,17 @@
 /********************************** (C) COPYRIGHT *******************************
  * File Name          : main.c
  * Author             : Yaohui
- * Version            : V1.0.0
- * Date               : 2025/08/03
+ * Version            : V1.1.0
+ * Date               : 2025/08/16
  * Description        : Main program body.
- *********************************************************************************
- * Copyright (c) 2021 Nanjing Qinheng Microelectronics Co., Ltd.
- * Attention: This software (modified or not) and binary are used for 
- * microcontroller manufactured by Nanjing Qinheng Microelectronics.
  *******************************************************************************/
-
-/*
- *@Note
- *Temp_Control_System:
- *TIM1_CH1(PB9)
- *This example demonstrates that the TIM_CH1(PB9) pin outputs PWM in PWM
- *mode 1 and PWM mode 2, and PWM supersede mode.
- *
- */
 
 #include "debug.h"
 #include "math.h"
 #include "AiP650E.h"
+
+
+#define Voltage 3.3
 
 /* PWM Output Mode Definition */
 #define PWM_MODE1   0
@@ -39,18 +29,16 @@
 #define PWM_SPE_MODE   PWM_SPE_MODE_DISABLE
 //#define PWM_SPE_MODE   PWM_SPE_MODE_ENABLE
 
-/* I2C Mode Definition */
-#define HOST_MODE   0
-#define SLAVE_MODE   1
-
-/* I2C Communication Mode Selection */
-#define I2C_MODE   HOST_MODE
-//#define I2C_MODE   SLAVE_MODE
-
+#define Fadr    0x0800F700
+#define Fsize   (256>>2)  // 64
+u32 buf[Fsize] = {  0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF  };
 
 
 /*********************************************************************
- * @fn      TIM1_OutCompare_Init
+ * @fn      TIM1_PWMOut_Init
  *
  * @brief   Initializes TIM1 output compare.
  *
@@ -102,6 +90,7 @@ void TIM1_PWMOut_Init(u16 arr, u16 psc, u16 ccp)
 	TIM_Cmd( TIM1, ENABLE );
 }
 
+
 /*********************************************************************
  * @fn      ADC_Function_Init
  *
@@ -137,6 +126,7 @@ void ADC_Function_Init(void)
     ADC_DMACmd(ADC1, ENABLE);
     ADC_Cmd(ADC1, ENABLE);
 }
+
 
 /*********************************************************************
  * @fn      Get_ADC_Val
@@ -176,6 +166,24 @@ u16 Get_ADC_Val(u8 ch)
     return val;
 }
 
+
+/*********************************************************************
+ * @fn      ADC2TEMP
+ *
+ * @brief   Change ADC RAW DATA to digital Temperature.
+ *
+ * @return  none
+ */
+u16 ADC2TEMP(u16 Temp_ADC, float Vcc)
+{
+    float U_Temp = (float)Temp_ADC/4095*Vcc;
+	float Rth = 11000/U_Temp-2200;
+	float temp = 1/(1/(273.15+25)+1/3985.85*log(Rth/10000))-273.15;
+
+    return floor(temp);
+}
+
+
 /*********************************************************************
  * @fn      calculatePWM
  *
@@ -186,67 +194,106 @@ u16 Get_ADC_Val(u8 ch)
  *
  * @return  pwm
  */
- u16 calculatePWM(u16 Temp_ADC, float Vcc) {
+ u16 calculatePWM(u16 Temp_ADC, float Vcc, u8 mode) {
     u16 pwm = 0;
+    u16 LL[3] = { 55, 50, 45};
+    u16 UL[3] = { 90, 80, 70};
+    short k[3] = { 15, 20, 22};
+    short b[3] = { -350, -400, -400};
+
 	float U_Temp = (float)Temp_ADC/4095*Vcc;
 	float Rth = 11000/U_Temp-2200;
 	float temp = 1/(1/(273.15+25)+1/3985.85*log(Rth/10000))-273.15;
 
-    if (temp < 50) {
-        pwm = 600;
-    } else if (temp > 80) {
+    if (temp < LL[mode]) {
+        pwm = k[mode] * LL[mode] + b[mode];
+    } else if (temp > UL[mode]) {
         pwm = 1200;
     } else {
-        pwm = 20 * temp - 400;
+        pwm = k[mode] * temp + b[mode];
     }
     
 
-	printf("U_Temp: %f\r\n", U_Temp);
-	printf("Rth: %d\r\n", (int)Rth);
-	printf("Temp: %d\r\n", (int)temp);
-	printf("PWM: %04d\r\n", pwm);
+//	printf("U_Temp: %f\r\n", U_Temp);
+//	printf("Rth: %d\r\n", (int)Rth);
+//	printf("Temp: %d\r\n", (int)temp);
+//	printf("PWM: %04d\r\n", pwm);
+//	printf("Mode: %04d\r\n", mode);
     return pwm;
 }
 
+
 /*********************************************************************
- * @fn      IIC_Init
+ * @fn      Flash_Read_Fast
  *
- * @brief   Initializes the IIC peripheral.
+ * @brief   Flash Fast Program Test.
  *
  * @return  none
  */
-void IIC_Init(u32 bound, u16 address)
+void Flash_Read_Fast(void)
 {
-	GPIO_InitTypeDef GPIO_InitStructure={0};
-	I2C_InitTypeDef I2C_InitTSturcture={0};
+//    u32 i;
+//    u8 Verify_Flag = 0;
+//    FLASH_Status s;
 
-    RCC_APB2PeriphClockCmd( RCC_APB2Periph_GPIOA, ENABLE );
-    RCC_APB1PeriphClockCmd( RCC_APB1Periph_I2C1, ENABLE );
+    printf("Read flash\r\n");
+//    for(i=0; i<Fsize; i++){
+//        printf("adr-%08x v-%08x\r\n", Fadr +4*i, *(u32*)(Fadr +4*i));
+//    }
+    printf("adr-%08x v-%08x\r\n", Fadr, *(u32*)Fadr);
 
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_10;
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
-    GPIO_Init( GPIOA, &GPIO_InitStructure );
+    buf[0] =  *(u32*)Fadr;
+}
 
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_11;
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
-    GPIO_Init( GPIOA, &GPIO_InitStructure );
 
-	I2C_InitTSturcture.I2C_ClockSpeed = bound;
-	I2C_InitTSturcture.I2C_Mode = I2C_Mode_I2C;
-	I2C_InitTSturcture.I2C_DutyCycle = I2C_DutyCycle_16_9;
-	I2C_InitTSturcture.I2C_OwnAddress1 = address;
-	I2C_InitTSturcture.I2C_Ack = I2C_Ack_Enable;
-	I2C_InitTSturcture.I2C_AcknowledgedAddress = I2C_AcknowledgedAddress_7bit;
-    I2C_Init( I2C1, &I2C_InitTSturcture );
+/*********************************************************************
+ * @fn      Flash_Write_Fast
+ *
+ * @brief   Flash Fast Program Test.
+ *
+ * @return  none
+ */
+void Flash_Write_Fast(void)
+{
+//    u32 i;
+    u8 Verify_Flag = 0;
+    FLASH_Status s;
 
-	I2C_Cmd( I2C1, ENABLE );
+    s = FLASH_ROM_ERASE(Fadr, Fsize*4);
+    if(s != FLASH_COMPLETE)
+    {
+        printf("check FLASH_ADR_RANGE_ERROR FLASH_ALIGN_ERROR or FLASH_OP_RANGE_ERROR\r\n");
+        return;
+    }
 
-#if (I2C_MODE == HOST_MODE)
-	I2C_AcknowledgeConfig( I2C1, ENABLE );
+    printf("Erase flash\r\n");
+    printf("adr-%08x v-%08x\r\n", Fadr, *(u32*)Fadr);
 
-#endif
+    s = FLASH_ROM_WRITE( Fadr, buf, Fsize*4);
+
+    if(s != FLASH_COMPLETE)
+    {
+        printf("check FLASH_ADR_RANGE_ERROR FLASH_ALIGN_ERROR or FLASH_OP_RANGE_ERROR\r\n");
+        return;
+    }
+
+    printf("Write flash\r\n");
+    printf("adr-%08x v-%08x\r\n", Fadr, *(u32*)Fadr);
+
+    if(buf[0] == *(u32 *)(Fadr))
+    {
+        Verify_Flag = 0;
+    }
+    else
+    {
+        Verify_Flag = 1;
+    }
+    
+
+    if(Verify_Flag)
+        printf("%d Byte Verify Fail\r\n", (Fsize*4));
+    else
+        printf("%d Byte Verify Suc\r\n", (Fsize*4));
 }
 
 
@@ -257,163 +304,78 @@ void IIC_Init(u32 bound, u16 address)
  *
  * @return  none
  */
-int main(void)
+ int main(void)
 {
-	u16 Temper_ADC = 0;
+    u16 Temper_ADC= 0;                  // 温度中转值
+    u8  KEY_SCAN = 0x00;                // 按键事件
+    u8  arr[3] = {0};                   // 显存
+    u8  Temper_Curve_Mode = 0x01;       // 温度曲线模式
+    _Bool Display_Temper_OR_PWM = 0;
+    u8 COUNT_Display_Temper_OR_PWM = 0;
 
-	SystemCoreClockUpdate();
-	Delay_Init();
-	TIM1_PWMOut_Init( 1200, 2-1, 600 );
-	ADC_Function_Init();
 
-//	IIC_Init(1000, 0x02);
-	soft_AiP650E_Init();
-
+    SystemCoreClockUpdate();
+    Delay_Init();                       // 延时函数初始化
     USART_Printf_Init(115200);
-    printf("SystemClk:%d\r\n", SystemCoreClock);
-    printf( "ChipID:%08x\r\n", DBGMCU_GetCHIPID() );
-u8 KEY_TEST = 0x2E;
+    TIM1_PWMOut_Init(1200, 2-1, 600);   // PWM初始化
+    ADC_Function_Init();                // ADC初始化
+    soft_AiP650E_Init();                // I2C初始化
 
-u32 Fadr = 0x08003000;
-switch(*(u32*)(Fadr)) {
-	case 0x00000000:
+    TIM1_PWMOut_Init(1200, 2-1, 1200);  // PWM最大
+    AiP650E_Fresh();                    // 数显刷屏初始化
+    Delay_Ms(1000);
 
-		break;
+    Temper_Curve_Mode = *(u32 *)(Fadr);
+    buf[0] =  *(u32 *)(Fadr);
+    printf("Temp:Mode=%d\r\n", Temper_Curve_Mode);
+    if (!((Temper_Curve_Mode==0x00)||(Temper_Curve_Mode==0x01)||(Temper_Curve_Mode==0x02)))
+    {
+        buf[0] = 0x02;
+        Flash_Write_Fast();
+        Temper_Curve_Mode = *(u32 *)(Fadr);
+    }
+    AiP_Mode2Array(arr, Temper_Curve_Mode);
+    AiP650E_Display_Number(arr);
+    Delay_Ms(1000);
 
-}
+    while(1)
+    {
+        KEY_SCAN = AiP650E_Return_KEY();
+        if(KEY_SCAN == 0x46)
+        {
+            buf[0]++;
+            if (!((buf[0]==0x00)||(buf[0]== 0x01)||(buf[0]==0x02)))
+                buf[0] = 0x00;
+            Flash_Write_Fast();
+            Temper_Curve_Mode = *(u32 *)(Fadr);
+            printf("Temp:Mode=%d\r\n", Temper_Curve_Mode);
 
-u8 temp = 0;
+            AiP_Mode2Array(arr, Temper_Curve_Mode);
+            AiP650E_Display_Number(arr);
+        }
 
-while(1)
-{
-// Key Test
-AiP650E_START();
-soft_AiP650E_Write(0x49);
-AiP650E_waitACK();
-KEY_TEST = soft_AiP650E_Read();
-AiP650E_waitACK();
-AiP650E_STOP();
-printf("KEY:%X\r\n", KEY_TEST);
+        Delay_Ms(1000);
+        
+        Temper_ADC = Get_ADC_Val(ADC_Channel_1);
+        TIM1_PWMOut_Init(1200, 2-1, calculatePWM(Temper_ADC, Voltage, Temper_Curve_Mode));
 
-temp++;
+        if(Display_Temper_OR_PWM)
+        {
+            AiP_Temp2Array(arr, ADC2TEMP(Temper_ADC, Voltage));
+            AiP650E_Display_Number(arr);
+            COUNT_Display_Temper_OR_PWM++;
+        }
+        else if(!Display_Temper_OR_PWM)
+        {
+            AiP_PWM2Array(arr, calculatePWM(Temper_ADC, Voltage, Temper_Curve_Mode));
+            AiP650E_Display_Number(arr);
+            COUNT_Display_Temper_OR_PWM++;
+        }
 
-/* Temperature Update ********************************************************/ 
-    Temper_ADC = Get_ADC_Val(ADC_Channel_1);
-
-    printf("Temp_ADC: %04d\r\n", Temper_ADC);
-///////////////////////////////////////////////////////////////////////
-
-/* PWM Update ********************************************************/ 
-	TIM1_PWMOut_Init( 1200, 2-1, calculatePWM(Temper_ADC, 3.3));
-	Delay_Ms(100);
-///////////////////////////////////////////////////////////////////////
-
-/* Display ***********************************************************/ 
-//DIG1
-AiP650E_START();
-soft_AiP650E_Write(0x68);
-AiP650E_waitACK();
-soft_AiP650E_Write(0xFF);
-AiP650E_waitACK();
-AiP650E_STOP();
-
-AiP650E_START();
-soft_AiP650E_Write(0x6A);
-AiP650E_waitACK();
-soft_AiP650E_Write(temp);
-AiP650E_waitACK();
-AiP650E_STOP();
-
-AiP650E_START();
-soft_AiP650E_Write(0x6C);
-AiP650E_waitACK();
-soft_AiP650E_Write(0xFF);
-AiP650E_waitACK();
-AiP650E_STOP();
-
-AiP650E_START();
-soft_AiP650E_Write(0x6E);
-AiP650E_waitACK();
-soft_AiP650E_Write(0xFF);
-AiP650E_waitACK();
-AiP650E_STOP();
-
-AiP650E_START();
-soft_AiP650E_Write(0x48);
-AiP650E_waitACK();
-soft_AiP650E_Write(0x71);
-AiP650E_waitACK();
-AiP650E_STOP();
-/*
-//while(I2C_GetFlagStatus(I2C1, I2C_FLAG_BUSY) != RESET);
-I2C_GenerateSTART(I2C1, ENABLE);
-
-while(!I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_MODE_SELECT));
-I2C_SendData( I2C1, 0x68);
-
-//while(!I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED));
-//while( !I2C_CheckEvent( I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTING ) );
-I2C_SendData( I2C1, 0x4F);
-//while( !I2C_CheckEvent( I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTED ) );
-I2C_GenerateSTOP( I2C1, ENABLE );
-Delay_Ms(1);
-
-//DIG2
-while(I2C_GetFlagStatus(I2C1, I2C_FLAG_BUSY) != RESET);
-I2C_GenerateSTART(I2C1, ENABLE);
-
-//while(!I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_MODE_SELECT));
-I2C_SendData( I2C1, 0x6A);
-
-//while(!I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED));
-//while( !I2C_CheckEvent( I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTING ) );
-I2C_SendData( I2C1, 0xFF);
-//while( !I2C_CheckEvent( I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTED ) );
-I2C_GenerateSTOP( I2C1, ENABLE );
-Delay_Ms(1);
-
-//DIG3
-//while(I2C_GetFlagStatus(I2C1, I2C_FLAG_BUSY) != RESET);
-I2C_GenerateSTART(I2C1, ENABLE);
-
-//while(!I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_MODE_SELECT));
-I2C_SendData(I2C1, 0x6C);
-
-//while(!I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED));
-//while( !I2C_CheckEvent( I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTING ) );
-I2C_SendData( I2C1, 0xFF);
-//while( !I2C_CheckEvent( I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTED ) );
-I2C_GenerateSTOP( I2C1, ENABLE );
-Delay_Ms(1);
-
-//DIG4
-//while(I2C_GetFlagStatus(I2C1, I2C_FLAG_BUSY) != RESET);
-I2C_GenerateSTART(I2C1, ENABLE);
-
-//while(!I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_MODE_SELECT));
-I2C_SendData(I2C1, 0x6E);
-
-//while(!I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED));
-//while( !I2C_CheckEvent( I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTING ) );
-I2C_SendData( I2C1, 0xFF);
-//while( !I2C_CheckEvent( I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTED ) );
-I2C_GenerateSTOP( I2C1, ENABLE );
-Delay_Ms(1);
-
-//DISPLAY
-//while(I2C_GetFlagStatus(I2C1, I2C_FLAG_BUSY) != RESET);
-I2C_GenerateSTART(I2C1, ENABLE);
-
-//while(!I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_MODE_SELECT));
-I2C_SendData(I2C1, 0x48);
-
-//while(!I2C_CheckEvent(I2C1, I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED));
-//while( !I2C_CheckEvent( I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTING ) );
-I2C_SendData( I2C1, 0x71);
-//while( !I2C_CheckEvent( I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTED ) );
-I2C_GenerateSTOP( I2C1, ENABLE );*/
-
-Delay_Ms(100);
-///////////////////////////////////////////////////////////////////////
-}
+        if(COUNT_Display_Temper_OR_PWM==5)
+        {
+            COUNT_Display_Temper_OR_PWM = 0;
+            Display_Temper_OR_PWM = !Display_Temper_OR_PWM;
+        }
+    }
 }
