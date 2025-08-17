@@ -9,86 +9,24 @@
 #include "debug.h"
 #include "math.h"
 #include "AiP650E.h"
+#include "pwm_utils.h"
+#include "display_utils.h"
+#include "button_utils.h"
 
-
+// 系统电压定义，用于温度计算
 #define Voltage 3.3
 
-/* PWM Output Mode Definition */
-#define PWM_MODE1   0
-#define PWM_MODE2   1
-
-/* PWM Output Mode Selection */
-//#define PWM_MODE PWM_MODE1
-#define PWM_MODE PWM_MODE2
-
-/* PWM Supersede Mode Enable Definition*/
-#define PWM_SPE_MODE_DISABLE   0
-#define PWM_SPE_MODE_ENABLE    1
-
-/* PWM Supersede Mode Enable Selection */
-#define PWM_SPE_MODE   PWM_SPE_MODE_DISABLE
-//#define PWM_SPE_MODE   PWM_SPE_MODE_ENABLE
-
-#define Fadr    0x0800F700
-#define Fsize   (256>>2)  // 64
+// Flash存储地址和大小定义
+#define Fadr    0x0800F700    // Flash存储地址
+#define Fsize   (256>>2)      // Flash存储大小：256字节/4 = 64个32位整数
+// 初始化缓冲区，第一个值为0x02（默认模式），其余为0xFF
 u32 buf[Fsize] = {  0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
                     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
                     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
                     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF  };
 
 
-/*********************************************************************
- * @fn      TIM1_PWMOut_Init
- *
- * @brief   Initializes TIM1 output compare.
- *
- * @param   arr - the period value.
- *          psc - the prescaler value.
- *          ccp - the pulse value.
- *
- * @return  none
- */
-void TIM1_PWMOut_Init(u16 arr, u16 psc, u16 ccp)
-{
-	GPIO_InitTypeDef GPIO_InitStructure={0};
-	TIM_OCInitTypeDef TIM_OCInitStructure={0};
-	TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStructure={0};
 
-	RCC_APB2PeriphClockCmd( RCC_APB2Periph_GPIOB | RCC_APB2Periph_TIM1, ENABLE );
-
-	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9;
-	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
-	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
-	GPIO_Init( GPIOB, &GPIO_InitStructure );
-
-	TIM_TimeBaseInitStructure.TIM_Period = arr;
-	TIM_TimeBaseInitStructure.TIM_Prescaler = psc;
-	TIM_TimeBaseInitStructure.TIM_ClockDivision = TIM_CKD_DIV1;
-	TIM_TimeBaseInitStructure.TIM_CounterMode = TIM_CounterMode_Up;
-	TIM_TimeBaseInit( TIM1, &TIM_TimeBaseInitStructure);
-
-#if (PWM_MODE == PWM_MODE1)
-  TIM_OCInitStructure.TIM_OCMode = TIM_OCMode_PWM1;
-
-#elif (PWM_MODE == PWM_MODE2)
-	TIM_OCInitStructure.TIM_OCMode = TIM_OCMode_PWM2;
-
-#endif
-
-	TIM_OCInitStructure.TIM_OutputState = TIM_OutputState_Enable;
-	TIM_OCInitStructure.TIM_Pulse = ccp;
-	TIM_OCInitStructure.TIM_OCPolarity = TIM_OCPolarity_High;
-	TIM_OC1Init( TIM1, &TIM_OCInitStructure );
-
-#if (PWM_SPE_MODE == PWM_SPE_MODE_ENABLE)
-	TIM_OC12_SupersedeModeCmd( TIM1, TIM_Supersede_Mode_OC1_H, TIM_Supersede_Mode_OC2_H, ENABLE);
-#endif
-
-	TIM_CtrlPWMOutputs(TIM1, ENABLE );
-	TIM_OC1PreloadConfig( TIM1, TIM_OCPreload_Disable );
-	TIM_ARRPreloadConfig( TIM1, ENABLE );
-	TIM_Cmd( TIM1, ENABLE );
-}
 
 
 /*********************************************************************
@@ -98,33 +36,41 @@ void TIM1_PWMOut_Init(u16 arr, u16 psc, u16 ccp)
  *
  * @return  none
  */
+// ADC功能初始化函数
+// 功能：配置ADC1用于温度采集，使用GPIOA的Pin1作为模拟输入
 void ADC_Function_Init(void)
 {
     ADC_InitTypeDef  ADC_InitStructure = {0};
     GPIO_InitTypeDef GPIO_InitStructure = {0};
 
+    // 使能GPIOA和ADC1的时钟
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
 
+    // 配置GPIOA的Pin1为模拟输入模式（连接NTC热敏电阻）
     GPIO_InitStructure.GPIO_Pin = GPIO_Pin_1;
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AIN;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AIN;    // 模拟输入模式
     GPIO_Init(GPIOA, &GPIO_InitStructure);
 
+    // 复位ADC1到默认状态
     ADC_DeInit(ADC1);
 
+    // 配置ADC时钟为6分频
     ADC_CLKConfig(ADC1, ADC_CLK_Div6);
 
-    ADC_InitStructure.ADC_Mode = ADC_Mode_Independent;
-    ADC_InitStructure.ADC_ScanConvMode = DISABLE;
-//    ADC_InitStructure.ADC_ContinuousConvMode = ENABLE;
-    ADC_InitStructure.ADC_ContinuousConvMode = DISABLE;
-    ADC_InitStructure.ADC_ExternalTrigConv = ADC_ExternalTrigConv_None;
-    ADC_InitStructure.ADC_DataAlign = ADC_DataAlign_Right;
-    ADC_InitStructure.ADC_NbrOfChannel = 1;
+    // 配置ADC参数
+    ADC_InitStructure.ADC_Mode = ADC_Mode_Independent;           // 独立模式
+    ADC_InitStructure.ADC_ScanConvMode = DISABLE;                // 禁用扫描模式
+//    ADC_InitStructure.ADC_ContinuousConvMode = ENABLE;         // 连续转换模式（已注释）
+    ADC_InitStructure.ADC_ContinuousConvMode = DISABLE;          // 单次转换模式
+    ADC_InitStructure.ADC_ExternalTrigConv = ADC_ExternalTrigConv_None; // 软件触发
+    ADC_InitStructure.ADC_DataAlign = ADC_DataAlign_Right;       // 右对齐数据
+    ADC_InitStructure.ADC_NbrOfChannel = 1;                      // 1个转换通道
     ADC_Init(ADC1, &ADC_InitStructure);
 
-    ADC_DMACmd(ADC1, ENABLE);
-    ADC_Cmd(ADC1, ENABLE);
+    // 启用ADC和DMA
+    ADC_DMACmd(ADC1, ENABLE);    // 启用DMA传输
+    ADC_Cmd(ADC1, ENABLE);       // 启用ADC
 }
 
 
@@ -153,14 +99,22 @@ void ADC_Function_Init(void)
  *
  * @return  none
  */
+// 获取ADC转换值的函数
+// 功能：读取指定ADC通道的转换结果
+// 参数：ch - ADC通道号（0-15）
+// 返回值：ADC转换结果（12位，0-4095）
 u16 Get_ADC_Val(u8 ch)
 {
     u16 val;
 
+    // 配置ADC通道和采样时间
     ADC_RegularChannelConfig(ADC1, ch, 1, ADC_SampleTime_11Cycles);
+    // 启动软件转换
     ADC_SoftwareStartConvCmd(ADC1, ENABLE);
 
+    // 等待转换完成（轮询方式）
     while(!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC));
+    // 读取转换结果
     val = ADC_GetConversionValue(ADC1);
 
     return val;
@@ -174,127 +128,26 @@ u16 Get_ADC_Val(u8 ch)
  *
  * @return  none
  */
+// ADC值转温度函数
+// 功能：将ADC原始数据转换为温度值（摄氏度）
+// 参数：Temp_ADC - ADC原始值, Vcc - 系统电压
+// 返回值：温度值（摄氏度）
 u16 ADC2TEMP(u16 Temp_ADC, float Vcc)
 {
+    // 将ADC值转换为电压值（12位ADC，满量程4095）
     float U_Temp = (float)Temp_ADC/4095*Vcc;
-	float Rth = 11000/U_Temp-2200;
-	float temp = 1/(1/(273.15+25)+1/3985.85*log(Rth/10000))-273.15;
+    // 根据分压电路计算NTC热敏电阻阻值
+    // 电路：Vcc -> 11K电阻 -> NTC -> 2.2K电阻 -> GND
+    float Rth = 11000/U_Temp-2200;
+    // 使用Steinhart-Hart方程计算温度
+    // 这是NTC热敏电阻的标准温度计算公式
+    float temp = 1/(1/(273.15+25)+1/3985.85*log(Rth/10000))-273.15;
 
-    return floor(temp);
+    return floor(temp);    // 返回向下取整的温度值
 }
 
 
-/*********************************************************************
- * @fn      calculatePWM
- *
- * @brief   Calculate PWM from Temperature.
- *
- * @param   Temper - Temperatur from NTC.
- *          pwm - Frequency.
- *
- * @return  pwm
- */
- u16 calculatePWM(u16 Temp_ADC, float Vcc, u8 mode) {
-    u16 pwm = 0;
-    u16 LL[3] = { 55, 50, 45};
-    u16 UL[3] = { 90, 80, 70};
-    short k[3] = { 15, 20, 22};
-    short b[3] = { -350, -400, -400};
 
-	float U_Temp = (float)Temp_ADC/4095*Vcc;
-	float Rth = 11000/U_Temp-2200;
-	float temp = 1/(1/(273.15+25)+1/3985.85*log(Rth/10000))-273.15;
-
-    if (temp < LL[mode]) {
-        pwm = k[mode] * LL[mode] + b[mode];
-    } else if (temp > UL[mode]) {
-        pwm = 1200;
-    } else {
-        pwm = k[mode] * temp + b[mode];
-    }
-    
-
-//	printf("U_Temp: %f\r\n", U_Temp);
-//	printf("Rth: %d\r\n", (int)Rth);
-//	printf("Temp: %d\r\n", (int)temp);
-//	printf("PWM: %04d\r\n", pwm);
-//	printf("Mode: %04d\r\n", mode);
-    return pwm;
-}
-
-
-/*********************************************************************
- * @fn      Flash_Read_Fast
- *
- * @brief   Flash Fast Program Test.
- *
- * @return  none
- */
-void Flash_Read_Fast(void)
-{
-//    u32 i;
-//    u8 Verify_Flag = 0;
-//    FLASH_Status s;
-
-    printf("Read flash\r\n");
-//    for(i=0; i<Fsize; i++){
-//        printf("adr-%08x v-%08x\r\n", Fadr +4*i, *(u32*)(Fadr +4*i));
-//    }
-    printf("adr-%08x v-%08x\r\n", Fadr, *(u32*)Fadr);
-
-    buf[0] =  *(u32*)Fadr;
-}
-
-
-/*********************************************************************
- * @fn      Flash_Write_Fast
- *
- * @brief   Flash Fast Program Test.
- *
- * @return  none
- */
-void Flash_Write_Fast(void)
-{
-//    u32 i;
-    u8 Verify_Flag = 0;
-    FLASH_Status s;
-
-    s = FLASH_ROM_ERASE(Fadr, Fsize*4);
-    if(s != FLASH_COMPLETE)
-    {
-        printf("check FLASH_ADR_RANGE_ERROR FLASH_ALIGN_ERROR or FLASH_OP_RANGE_ERROR\r\n");
-        return;
-    }
-
-    printf("Erase flash\r\n");
-    printf("adr-%08x v-%08x\r\n", Fadr, *(u32*)Fadr);
-
-    s = FLASH_ROM_WRITE( Fadr, buf, Fsize*4);
-
-    if(s != FLASH_COMPLETE)
-    {
-        printf("check FLASH_ADR_RANGE_ERROR FLASH_ALIGN_ERROR or FLASH_OP_RANGE_ERROR\r\n");
-        return;
-    }
-
-    printf("Write flash\r\n");
-    printf("adr-%08x v-%08x\r\n", Fadr, *(u32*)Fadr);
-
-    if(buf[0] == *(u32 *)(Fadr))
-    {
-        Verify_Flag = 0;
-    }
-    else
-    {
-        Verify_Flag = 1;
-    }
-    
-
-    if(Verify_Flag)
-        printf("%d Byte Verify Fail\r\n", (Fsize*4));
-    else
-        printf("%d Byte Verify Suc\r\n", (Fsize*4));
-}
 
 
 /*********************************************************************
@@ -304,78 +157,92 @@ void Flash_Write_Fast(void)
  *
  * @return  none
  */
+// 主函数 - 温度控制系统的核心程序
+// 功能：实现基于NTC热敏电阻的温度测量和PWM输出控制
  int main(void)
 {
-    u16 Temper_ADC= 0;                  // �¶���תֵ
-    u8  KEY_SCAN = 0x00;                // �����¼�
-    u8  arr[3] = {0};                   // �Դ�
-    u8  Temper_Curve_Mode = 0x01;       // �¶�����ģʽ
-    _Bool Display_Temper_OR_PWM = 0;
-    u8 COUNT_Display_Temper_OR_PWM = 0;
+    // 变量定义和初始化
+    u16 Temper_ADC= 0;                  // 温度转换值
+    u8  KEY_SCAN = 0x00;                // 按键事件
+    u8  arr[3] = {0};                   // 数组
+    u8  Temper_Curve_Mode = 0x01;       // 温度曲线模式
+    _Bool Display_Temper_OR_PWM = 0;     // 显示切换标志：0显示温度，1显示PWM
+    u8 COUNT_Display_Temper_OR_PWM = 0;  // 显示切换计数器
 
+    // 系统初始化阶段
+    SystemCoreClockUpdate();             // 更新系统时钟
+    Delay_Init();                       // 延时函数初始化
+    USART_Printf_Init(115200);          // 串口初始化，波特率115200
+    TIM1_PWMOut_Init(1200, 2-1, 600);   // PWM初始化（周期1200，预分频1，占空比600）
+    ADC_Function_Init();                // ADC初始化
+    soft_AiP650E_Init();                // I2C初始化（用于数码管显示）
 
-    SystemCoreClockUpdate();
-    Delay_Init();                       // ��ʱ������ʼ��
-    USART_Printf_Init(115200);
-    TIM1_PWMOut_Init(1200, 2-1, 600);   // PWM��ʼ��
-    ADC_Function_Init();                // ADC��ʼ��
-    soft_AiP650E_Init();                // I2C��ʼ��
+    // 重新配置PWM参数
+    TIM1_PWMOut_Init(1200, 2-1, 1200);  // PWM设置（最大占空比）
+    AiP650E_Fresh();                    // 数码管刷新初始化
+    Delay_Ms(1000);                     // 延时1秒
 
-    TIM1_PWMOut_Init(1200, 2-1, 1200);  // PWM���
-    AiP650E_Fresh();                    // ����ˢ����ʼ��
-    Delay_Ms(1000);
-
-    Temper_Curve_Mode = *(u32 *)(Fadr);
-    buf[0] =  *(u32 *)(Fadr);
+    // 从Flash读取温度控制模式配置
+    Temper_Curve_Mode = button_get_mode();  // 从Flash读取模式值
+    buf[0] =  *(u32 *)(Fadr);           // 同步到缓冲区
     printf("Temp:Mode=%d\r\n", Temper_Curve_Mode);
-    if (!((Temper_Curve_Mode==0x00)||(Temper_Curve_Mode==0x01)||(Temper_Curve_Mode==0x02)))
+    
+    // 验证模式值是否有效，如果无效则使用默认模式0x02
+    if (!button_is_valid_mode(Temper_Curve_Mode))
     {
-        buf[0] = 0x02;
-        Flash_Write_Fast();
-        Temper_Curve_Mode = *(u32 *)(Fadr);
+        button_set_default_mode();       // 设置默认模式
+        Temper_Curve_Mode = button_get_mode(); // 重新读取
     }
-    AiP_Mode2Array(arr, Temper_Curve_Mode);
-    AiP650E_Display_Number(arr);
-    Delay_Ms(1000);
+    
+    // 显示当前模式
+    AiP_Mode2Array(arr, Temper_Curve_Mode);  // 将模式转换为显示数组
+    AiP650E_Display_Number(arr);             // 在数码管上显示模式
+    Delay_Ms(1000);                          // 延时1秒
 
+    // 主循环 - 温度控制系统的核心逻辑
     while(1)
     {
-        KEY_SCAN = AiP650E_Return_KEY();
-        if(KEY_SCAN == 0x46)
+        // 按键检测和处理
+        KEY_SCAN = AiP650E_Return_KEY();     // 扫描按键状态
+        if(button_process_key(KEY_SCAN))     // 如果检测到有效按键
         {
-            buf[0]++;
-            if (!((buf[0]==0x00)||(buf[0]== 0x01)||(buf[0]==0x02)))
-                buf[0] = 0x00;
-            Flash_Write_Fast();
-            Temper_Curve_Mode = *(u32 *)(Fadr);
+            button_switch_mode();             // 切换模式
+            
+            button_save_config();             // 保存新模式到Flash
+            Temper_Curve_Mode = button_get_mode(); // 重新读取模式值
             printf("Temp:Mode=%d\r\n", Temper_Curve_Mode);
 
+            // 显示新选择的模式
             AiP_Mode2Array(arr, Temper_Curve_Mode);
             AiP650E_Display_Number(arr);
         }
 
-        Delay_Ms(1000);
+        Delay_Ms(1000);                     // 延时1秒
         
-        Temper_ADC = Get_ADC_Val(ADC_Channel_1);
+        // 温度测量和PWM控制
+        Temper_ADC = Get_ADC_Val(ADC_Channel_1);  // 读取ADC通道1的温度值
+        // 根据温度计算PWM值并更新输出
         TIM1_PWMOut_Init(1200, 2-1, calculatePWM(Temper_ADC, Voltage, Temper_Curve_Mode));
 
+        // 根据显示标志选择显示内容
         if(Display_Temper_OR_PWM)
         {
             AiP_Temp2Array(arr, ADC2TEMP(Temper_ADC, Voltage));
             AiP650E_Display_Number(arr);
-            COUNT_Display_Temper_OR_PWM++;
+            display_increment_counter(&COUNT_Display_Temper_OR_PWM);
         }
         else if(!Display_Temper_OR_PWM)
         {
             AiP_PWM2Array(arr, calculatePWM(Temper_ADC, Voltage, Temper_Curve_Mode));
             AiP650E_Display_Number(arr);
-            COUNT_Display_Temper_OR_PWM++;
+            display_increment_counter(&COUNT_Display_Temper_OR_PWM);
         }
 
-        if(COUNT_Display_Temper_OR_PWM==5)
+        // 增加计数器并检查是否需要切换显示模式
+        if(display_is_time_to_switch(COUNT_Display_Temper_OR_PWM))
         {
-            COUNT_Display_Temper_OR_PWM = 0;
-            Display_Temper_OR_PWM = !Display_Temper_OR_PWM;
+            display_reset_counter(&COUNT_Display_Temper_OR_PWM);
+            display_toggle_mode(&Display_Temper_OR_PWM);
         }
     }
 }
